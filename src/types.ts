@@ -43,6 +43,7 @@ export interface ClimateConfig {
 
 export interface DeviceConfig {
   name?: string
+  topic?: string
   id: string
   key: string
   ip?: string

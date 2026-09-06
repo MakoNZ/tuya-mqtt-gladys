@@ -38,7 +38,6 @@ Configure via environment variables (or copy `.env.sample` to `.env`):
 | `MQTT_PORT`             | `1883`           | MQTT broker port                      |
 | `MQTT_USERNAME`         | (empty)          | MQTT username                         |
 | `MQTT_PASSWORD`         | (empty)          | MQTT password                         |
-| `MQTT_DISCOVERY_PREFIX` | `homeassistant`  | Home Assistant discovery topic prefix |
 | `DEVICES_CONFIG_PATH`   | `./devices.conf` | Path to devices configuration file    |
 
 ### Device Configuration

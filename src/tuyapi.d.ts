@@ -18,11 +18,12 @@ declare module 'tuyapi' {
     connect(): Promise<void>
     disconnect(): Promise<void>
     get(options: { dps: number }): Promise<unknown>
-    get(options: { schema: true }): Promise<string>
+    get(options: { schema: true }): Promise<DpsData>
     set(options: { dps: number; set: unknown }): Promise<unknown>
     isConnected(): boolean
 
     on(event: 'data', callback: (data: DpsData | string) => void): this
+    on(event: 'dp-refresh', callback: (data: DpsData) => void): this
     on(event: 'connected', callback: () => void): this
     on(event: 'disconnected', callback: () => void): this
     on(event: 'error', callback: (err: Error) => void): this

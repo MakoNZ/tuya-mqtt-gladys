@@ -1,6 +1,7 @@
 import type { MqttClient } from 'mqtt'
 import type { DeviceConfig } from './types'
 import { TuyaDevice } from './tuya-device'
+import { log, logError } from './utils'
 
 export class GenericDevice extends TuyaDevice {
   private haSubscriptions: string[] = []
@@ -16,7 +17,7 @@ export class GenericDevice extends TuyaDevice {
       try {
         await this.device.get({ schema: true })
       } catch {
-        console.log('[tuya-mqtt] no schema or template for', this.config.id)
+        log('[tuya-mqtt] no schema or template for', this.config.id)
       }
     }
 
@@ -29,7 +30,7 @@ export class GenericDevice extends TuyaDevice {
 
   protected publishHaDiscovery(): void {
     if (!this.config.template) {
-      console.log('[tuya-mqtt] no template, skipping HA discovery for', this.deviceId)
+      log('[tuya-mqtt] no template, skipping HA discovery for', this.deviceId)
       return
     }
 
@@ -46,7 +47,7 @@ export class GenericDevice extends TuyaDevice {
       if (commandTopic && !this.haSubscriptions.includes(commandTopic)) {
         this.haSubscriptions.push(commandTopic)
         this.mqttClient.subscribe(commandTopic, { qos: 1 }, (err) => {
-          if (err) console.error('[tuya-mqtt:error] subscribe failed', commandTopic, err.message)
+          if (err) logError('[tuya-mqtt:error] subscribe failed', commandTopic, err.message)
         })
       }
     }
@@ -58,12 +59,12 @@ export class GenericDevice extends TuyaDevice {
       // Subscribe to climate command topics
       const modeCommandTopic = `homeassistant/climate/${this.deviceId}/climate/mode/set`
       this.mqttClient.subscribe(modeCommandTopic, { qos: 1 }, (err) => {
-        if (err) console.error('[tuya-mqtt:error] subscribe failed', modeCommandTopic, err.message)
+        if (err) logError('[tuya-mqtt:error] subscribe failed', modeCommandTopic, err.message)
       })
 
       const presetCommandTopic = `homeassistant/climate/${this.deviceId}/climate/preset/set`
       this.mqttClient.subscribe(presetCommandTopic, { qos: 1 }, (err) => {
-        if (err) console.error('[tuya-mqtt:error] subscribe failed', presetCommandTopic, err.message)
+        if (err) logError('[tuya-mqtt:error] subscribe failed', presetCommandTopic, err.message)
       })
     }
 
@@ -71,25 +72,68 @@ export class GenericDevice extends TuyaDevice {
   }
 
   processMqttMessage(topic: string, message: string): void {
+    // Handle native Gladys MQTT API command topics:
+    // gladys/device/{deviceId}/feature/{featureId}/state
+    for (const entityName of Object.keys(this.deviceTopics)) {
+      if (topic === this.getGladysCommandTopic(entityName)) {
+        log(
+          '[tuya-mqtt:command] Gladys command for',
+          this.toString(),
+          entityName,
+          message,
+        )
+        this.handleHaCommand(entityName, message)
+        return
+      }
+    }
+
+    // Handle our clean device topics:
+    // {topicPrefix}{deviceName}/{entity}/set
+    if (topic.startsWith(this.baseTopic)) {
+      if (topic === this.baseTopic + 'command' && message === 'get-states') {
+        this.getStates()
+        return
+      }
+
+      if (topic.endsWith('/set')) {
+        const entityName = topic.slice(
+          this.baseTopic.length,
+          -'/set'.length,
+        )
+
+        if (entityName && this.deviceTopics[entityName]) {
+          log('[tuya-mqtt:command] device command for', this.toString(), entityName, message)
+          this.handleHaCommand(entityName, message)
+          return
+        }
+      }
+    }
+
+    // Handle Home Assistant-style command topics:
+    // homeassistant/{component}/{deviceId}/{entityName}/set
     const parts = topic.split('/')
+
     if (parts.length >= 5 && parts[0] === 'homeassistant') {
       const deviceId = parts[2]
 
-      // Handle template entity commands: homeassistant/{component}/{deviceId}/{entityName}/set
       if (parts.length === 5 && deviceId === this.deviceId && parts[4] === 'set') {
-        console.log('[tuya-mqtt:command] HA command for', parts[3], message)
+        log('[tuya-mqtt:command] HA command for', this.toString(), parts[3], message)
         this.handleHaCommand(parts[3], message)
         return
       }
 
-      // Handle climate commands: homeassistant/climate/{deviceId}/climate/{type}/set
-      if (parts.length === 6 && deviceId === this.deviceId && parts[3] === 'climate' && parts[5] === 'set') {
-        console.log('[tuya-mqtt:command] HA climate command for', parts[4], message)
+      // Handle climate commands:
+      // homeassistant/climate/{deviceId}/climate/{type}/set
+      if (
+        parts.length === 6 &&
+        deviceId === this.deviceId &&
+        parts[3] === 'climate' &&
+        parts[5] === 'set'
+      ) {
+        log('[tuya-mqtt:command] HA climate command for', this.toString(), parts[4], message)
         this.handleClimateCommand(parts[4], message)
         return
       }
-    } else if (topic === this.baseTopic + 'command' && message === 'get-states') {
-      this.getStates()
     }
   }
 }

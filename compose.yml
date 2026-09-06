@@ -1,0 +1,25 @@
+services:
+  tuya-mqtt:
+    image: makonz/tuya-mqtt-gladys:local
+    build: .
+    container_name: tuya-mqtt
+    restart: unless-stopped
+
+    environment:
+      TZ: ${TZ}
+      MQTT_HOST: ${MQTT_HOST}
+      MQTT_PORT: ${MQTT_PORT}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+      MQTT_TOPIC_PREFIX: ${MQTT_TOPIC_PREFIX}
+      DEVICES_CONFIG_PATH: ${DEVICES_CONFIG_PATH}
+
+    volumes:
+      - ./devices.conf:/app/devices.conf:ro
+
+    networks:
+      - homepinet
+
+networks:
+  homepinet:
+    external: true
