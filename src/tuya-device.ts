@@ -1,6 +1,6 @@
 import TuyAPI from 'tuyapi'
 import type { MqttClient } from 'mqtt'
-import type { DeviceConfig, TemplateEntry, HaEntityConfig } from './types'
+import type { DeviceConfig, TemplateEntry } from './types'
 import { sleep, isJsonString, calc, log, logError } from './utils'
 
 interface DpsValue {
@@ -104,14 +104,12 @@ export abstract class TuyaDevice {
         log('[tuya-mqtt] connected to', this.toString())
         this.connected = true
         this.connectFailures = 0 // Reset failure counter on successful connect
-        this.publishAvailability('online')
         this.init()
       }
     })
 
     this.device.on('disconnected', async () => {
       this.connected = false
-      this.publishAvailability('offline')
       log('[tuya-mqtt] disconnected from', this.toString())
       await sleep(5)
       this.reconnect()
@@ -125,257 +123,6 @@ export abstract class TuyaDevice {
 
   protected abstract init(): Promise<void>
 
-  protected abstract publishHaDiscovery(): void
-
-  protected publishAvailability(status: string): void {
-    this.mqttClient.publish(`homeassistant/sensor/${this.deviceId}/status`, status, { retain: true, qos: 1 })
-  }
-
-  protected publishHaConfig(
-    entityName: string,
-    component: string,
-    stateTopic: string,
-    commandTopic: string | undefined,
-    entry: TemplateEntry,
-  ): void {
-    const configTopic = `homeassistant/${component}/${this.deviceId}/${entityName}/config`
-
-    const payload: HaEntityConfig = {
-      name: `${this.deviceName} ${entry.name || entityName}`,
-      state_topic: stateTopic,
-      unique_id: `${this.deviceId}_${entityName}`,
-      device: {
-        identifiers: [this.deviceId],
-        name: this.deviceName,
-        manufacturer: 'Tuya',
-      },
-    }
-
-    if (commandTopic) payload.command_topic = commandTopic
-    if (component === 'switch') {
-      payload.payload_on = 'ON'
-      payload.payload_off = 'OFF'
-    }
-    if (component === 'number') {
-      if (entry.topicMin !== undefined) payload.min = entry.topicMin
-      if (entry.topicMax !== undefined) payload.max = entry.topicMax
-      payload.step = entry.type === 'float' ? 0.5 : 1
-      payload.mode = 'box'
-    }
-    if (component === 'sensor') {
-      // Numeric sensors need these to be chartable/aggregable in HA history.
-      if (entry.type === 'int' || entry.type === 'float') {
-        payload.state_class = 'measurement'
-      }
-    }
-    // Optional per-entity semantic hints (defined in the template config).
-    if (entry.device_class) payload.device_class = entry.device_class
-    if (entry.unit_of_measurement) payload.unit_of_measurement = entry.unit_of_measurement
-    if (component === 'select' && entry.options) {
-      payload.options = entry.options
-    }
-
-    this.mqttClient.publish(configTopic, JSON.stringify(payload), { retain: true, qos: 1 })
-  }
-
-  protected publishHaClimateConfig(): void {
-    const climate = this.config.climate
-    if (!climate) return
-
-    const entityName = 'climate'
-    const configTopic = `homeassistant/climate/${this.deviceId}/${entityName}/config`
-
-    const toTopic = (ref: string): string => {
-      const entry = this.deviceTopics[ref]
-      if (!entry) return ''
-      return this.getHaStateTopic(ref, entry)
-    }
-
-    const toCmdTopic = (ref: string): string => {
-      const entry = this.deviceTopics[ref]
-      if (!entry) return ''
-      return this.getHaCommandTopic(ref, entry) || ''
-    }
-
-    const currentTempTopic = toTopic(climate.entities.current_temperature)
-    const targetTempStateTopic = toTopic(climate.entities.target_temperature)
-    const targetTempCmdTopic = toCmdTopic(climate.entities.target_temperature)
-
-    if (!currentTempTopic || !targetTempStateTopic || !targetTempCmdTopic) {
-      log('[tuya-mqtt] climate: missing template entity topics, skipping')
-      return
-    }
-
-    // Build preset modes list from config
-    const presetModes: string[] = []
-    if (climate.entities.preset_modes) {
-      for (const haPreset of Object.keys(climate.entities.preset_modes)) {
-        presetModes.push(haPreset)
-      }
-    }
-
-    const payload: HaEntityConfig = {
-      name: climate.name || this.deviceName + ' Climate',
-      unique_id: `${this.deviceId}_climate`,
-      device: {
-        identifiers: [this.deviceId],
-        name: this.deviceName,
-        manufacturer: 'Tuya',
-      },
-      modes: climate.modes,
-      current_temperature_topic: currentTempTopic,
-      temperature_command_topic: targetTempCmdTopic,
-      temperature_state_topic: targetTempStateTopic,
-      mode_command_topic: `homeassistant/climate/${this.deviceId}/climate/mode/set`,
-      mode_state_topic: `homeassistant/climate/${this.deviceId}/climate/mode_state`,
-      min_temp: climate.min_temp || 7,
-      max_temp: climate.max_temp || 35,
-      temp_step: climate.temp_step || 1.0,
-      availability_topic: `homeassistant/sensor/${this.deviceId}/status`,
-      payload_available: 'online',
-      payload_not_available: 'offline',
-    }
-
-    if (presetModes.length > 0) {
-      payload.preset_mode_command_topic = `homeassistant/climate/${this.deviceId}/climate/preset/set`
-      payload.preset_mode_state_topic = `homeassistant/climate/${this.deviceId}/climate/preset_state`
-      payload.preset_modes = presetModes
-    }
-
-    this.mqttClient.publish(configTopic, JSON.stringify(payload), { retain: true, qos: 1 })
-    log('[tuya-mqtt] published climate discovery for', this.deviceName)
-  }
-
-  protected getClimateMode(): string {
-    const climate = this.config.climate
-    if (!climate) return 'off'
-
-    const powerRef = climate.entities.power
-    const powerEntry = this.deviceTopics[powerRef]
-    const powerVal = powerEntry ? this.dpsState[powerEntry.key]?.val : undefined
-    if (!powerVal) return 'off'
-
-    // If there's a mode entity, check it has a meaningful value
-    const modeRef = climate.entities.mode
-    if (modeRef) {
-      const modeEntry = this.deviceTopics[modeRef]
-      if (modeEntry) {
-        const modeVal = this.dpsState[modeEntry.key]?.val
-        return modeVal ? 'heat' : 'off'
-      }
-    }
-
-    return 'heat'
-  }
-
-  protected getClimatePreset(): string {
-    const climate = this.config.climate
-    if (!climate || !climate.entities.preset_modes) return 'none'
-
-    for (const [haPreset, entityName] of Object.entries(climate.entities.preset_modes)) {
-      const entry = this.deviceTopics[entityName]
-      if (entry) {
-        const val = this.dpsState[entry.key]?.val
-        if (val) return haPreset
-      }
-    }
-    return 'none'
-  }
-
-  protected publishClimateState(): void {
-    const climate = this.config.climate
-    if (!climate) return
-
-    // Publish climate mode state
-    const mode = this.getClimateMode()
-    this.mqttClient.publish(
-      `homeassistant/climate/${this.deviceId}/climate/mode_state`,
-      mode,
-      { retain: true, qos: 1 },
-    )
-
-    // Publish climate preset state
-    if (climate.entities.preset_modes) {
-      const preset = this.getClimatePreset()
-      this.mqttClient.publish(
-        `homeassistant/climate/${this.deviceId}/climate/preset_state`,
-        preset,
-        { retain: true, qos: 1 },
-      )
-    }
-  }
-
-  protected handleClimateCommand(commandType: string, message: string): void {
-    const climate = this.config.climate
-    if (!climate) return
-
-    if (commandType === 'mode') {
-      this.handleClimateModeCommand(message, climate)
-    } else if (commandType === 'preset') {
-      this.handleClimatePresetCommand(message, climate)
-    }
-  }
-
-  private handleClimateModeCommand(message: string, climate: import('./types').ClimateConfig): void {
-    const msg = message.toLowerCase().trim()
-
-    if (msg === 'off') {
-      // Turn power off
-      const powerRef = climate.entities.power
-      const entry = this.deviceTopics[powerRef]
-      if (entry) {
-        this.set({ dps: entry.key, set: false })
-      }
-      return
-    }
-
-    if (msg === 'heat') {
-      // Turn power on
-      const powerRef = climate.entities.power
-      const powerEntry = this.deviceTopics[powerRef]
-      if (powerEntry) {
-        this.set({ dps: powerEntry.key, set: true })
-      }
-
-      // Optionally set operating mode
-      const modeRef = climate.entities.mode
-      if (modeRef && climate.mode_map && climate.mode_map.heat) {
-        const modeEntry = this.deviceTopics[modeRef]
-        if (modeEntry) {
-          this.set({ dps: modeEntry.key, set: climate.mode_map.heat })
-        }
-      } else if (modeRef) {
-        const modeEntry = this.deviceTopics[modeRef]
-        if (modeEntry) {
-          // Default: try to set operating mode to "warm" or first known heat-like value
-          this.set({ dps: modeEntry.key, set: 'warm' })
-        }
-      }
-    }
-  }
-
-  private handleClimatePresetCommand(message: string, climate: import('./types').ClimateConfig): void {
-    const msg = message.toLowerCase().trim()
-    if (!climate.entities.preset_modes) return
-
-    for (const [haPreset, entityName] of Object.entries(climate.entities.preset_modes)) {
-      const entry = this.deviceTopics[entityName]
-      if (!entry) continue
-
-      if (msg === haPreset) {
-        this.set({ dps: entry.key, set: true })
-        return
-      }
-    }
-
-    // If message doesn't match any preset (e.g. "none"), turn all presets off
-    for (const [, entityName] of Object.entries(climate.entities.preset_modes)) {
-      const entry = this.deviceTopics[entityName]
-      if (entry) {
-        this.set({ dps: entry.key, set: false })
-      }
-    }
-  }
 
   protected async getStates(): Promise<void> {
     this.connected = false
@@ -430,9 +177,9 @@ export abstract class TuyaDevice {
           const state = this.getTopicState(entry, this.dpsState[key].val)
 
           if (state !== null) {
-            // Existing clean MQTT topic
-            const haTopic = this.getHaStateTopic(topicKey, entry)
-            this.mqttClient.publish(haTopic, state, {
+            // Neutral MQTT state topic
+            const stateTopic = this.getStateTopic(topicKey, entry)
+            this.mqttClient.publish(stateTopic, state, {
               retain: true,
               qos: 1,
             })
@@ -474,7 +221,6 @@ export abstract class TuyaDevice {
       }
 
       this.publishDpsTopics()
-      this.publishClimateState()
   }
 
   publishDpsTopics(): void {
@@ -490,11 +236,11 @@ export abstract class TuyaDevice {
     }
   }
 
-  protected getHaStateTopic(entityName: string, entry: TemplateEntry): string {
+  protected getStateTopic(entityName: string, entry: TemplateEntry): string {
     return `${this.baseTopic}${entityName}/state`
   }
 
-  protected getHaCommandTopic(entityName: string, entry: TemplateEntry): string | undefined {
+  protected getCommandTopic(entityName: string, entry: TemplateEntry): string | undefined {
     if (entry.type === 'float' || entry.type === 'int') {
       if (entry.topicMin === undefined && entry.topicMax === undefined) return undefined
     }
@@ -621,19 +367,6 @@ export abstract class TuyaDevice {
     return null
   }
 
-  protected getHaComponent(entry: TemplateEntry): string {
-    switch (entry.type) {
-      case 'bool': return 'switch'
-      case 'float':
-      case 'int':
-        return (entry.topicMin !== undefined || entry.topicMax !== undefined) ? 'number' : 'sensor'
-      case 'str':
-        return entry.options ? 'select' : 'sensor'
-      default:
-        return 'sensor'
-    }
-  }
-
   protected getTopicState(entry: TemplateEntry, value: unknown): string | null {
     if (value === undefined || value === null) return null
 
@@ -685,8 +418,8 @@ export abstract class TuyaDevice {
   processDeviceCommand(command: unknown, commandTopic: string): void {
     const stateTopic = commandTopic.replace('/set', '/state')
     const entityName = Object.keys(this.deviceTopics).find(
-      k => this.getHaStateTopic(k, this.deviceTopics[k]) === stateTopic ||
-           (this.getHaCommandTopic(k, this.deviceTopics[k]) === commandTopic)
+      k => this.getStateTopic(k, this.deviceTopics[k]) === stateTopic ||
+           (this.getCommandTopic(k, this.deviceTopics[k]) === commandTopic)
     )
 
     if (!entityName) {
@@ -694,10 +427,10 @@ export abstract class TuyaDevice {
       return
     }
 
-    this.handleHaCommand(entityName, String(command))
+    this.handleDeviceCommand(entityName, String(command))
   }
 
-  handleHaCommand(entityName: string, message: string): void {
+  handleDeviceCommand(entityName: string, message: string): void {
     const entry = this.deviceTopics[entityName]
     if (!entry) {
       log('[tuya-mqtt:command] unknown entity', entityName)
@@ -924,7 +657,6 @@ export abstract class TuyaDevice {
     this.reconnecting = true
 
     this.connected = false
-    this.publishAvailability('offline')
 
     this.connectFailures++
 
@@ -958,14 +690,6 @@ export abstract class TuyaDevice {
 
   disconnect(): void {
     this.device.disconnect()
-  }
-
-  republish(): void {
-    const status = this.device.isConnected() ? 'online' : 'offline'
-    this.publishAvailability(status)
-    if (this.device.isConnected()) {
-      this.publishHaDiscovery()
-    }
   }
 
   toString(): string {

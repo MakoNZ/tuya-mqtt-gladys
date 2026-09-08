@@ -44,19 +44,6 @@ function loadDevices(): DeviceConfig[] {
   }
 }
 
-let republishTimer: ReturnType<typeof setTimeout> | null = null
-
-async function onHaRestart(): Promise<void> {
-  for (let i = 0; i < 2; i++) {
-    log('[tuya-mqtt] re-publishing in 30s')
-    await sleep(30)
-    for (const device of devices) {
-      device.republish()
-    }
-    await sleep(2)
-  }
-}
-
 function main(): void {
   const mqttHost = process.env.MQTT_HOST || 'localhost'
   const mqttPort = Number(process.env.MQTT_PORT) || 1883
@@ -73,7 +60,6 @@ function main(): void {
   client.on('connect', () => {
     log('[tuya-mqtt] connected to MQTT')
     client.subscribe(topicPrefix + '#')
-    client.subscribe('homeassistant/status')
     client.subscribe('gladys/device/#')
 
     for (const config of deviceConfigs) {
@@ -92,13 +78,6 @@ function main(): void {
   client.on('message', (topic, buffer) => {
     try {
       const message = buffer.toString()
-      if (topic === 'homeassistant/status') {
-        if (message === 'online') {
-          if (republishTimer) clearTimeout(republishTimer)
-          republishTimer = setTimeout(onHaRestart, 1000)
-        }
-        return
-      }
 
       for (const device of devices) {
         device.processMqttMessage(topic, message)
