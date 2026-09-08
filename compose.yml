@@ -18,8 +18,8 @@ services:
       - ./devices.conf:/app/devices.conf:ro
 
     networks:
-      - homepinet
+      - mqtt
 
 networks:
-  homepinet:
+  mqtt:
     external: true

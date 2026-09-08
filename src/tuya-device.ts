@@ -26,7 +26,6 @@ export abstract class TuyaDevice {
   protected deviceTopics: Record<string, TemplateEntry> = {}
   protected connected = false
   protected reconnecting = false
-  protected heartbeatsMissed = 0
   protected isRgbtwLight = false
   protected baseTopic: string
   protected deviceName: string
@@ -61,7 +60,6 @@ export abstract class TuyaDevice {
     this.device = new TuyAPI(JSON.parse(JSON.stringify(this.options)))
     this.setupEventListeners()
     this.connectDevice()
-    this.monitorHeartbeat()
   }
 
   protected setupEventListeners(): void {
@@ -106,7 +104,6 @@ export abstract class TuyaDevice {
         log('[tuya-mqtt] connected to', this.toString())
         this.connected = true
         this.connectFailures = 0 // Reset failure counter on successful connect
-        this.heartbeatsMissed = 0
         this.publishAvailability('online')
         this.init()
       }
@@ -123,10 +120,6 @@ export abstract class TuyaDevice {
     this.device.on('error', (err) => {
       logError('[tuya-mqtt:error]', this.toString(), err)
       sleep(1).then(() => this.reconnect())
-    })
-
-    this.device.on('heartbeat', () => {
-      this.heartbeatsMissed = 0
     })
   }
 
@@ -973,22 +966,6 @@ export abstract class TuyaDevice {
     if (this.device.isConnected()) {
       this.publishHaDiscovery()
     }
-  }
-
-  protected monitorHeartbeat(): void {
-    setInterval(async () => {
-      if (this.connected) {
-        if (this.heartbeatsMissed > 3) {
-          logError('[tuya-mqtt:error]', this.toString(), 'missed 3 heartbeats, reconnecting')
-          this.device.disconnect()
-          await sleep(1)
-          this.connectDevice()
-        } else if (this.heartbeatsMissed > 0) {
-          log('[tuya-mqtt]', this.toString(), 'missed', this.heartbeatsMissed, 'heartbeat(s)')
-        }
-        this.heartbeatsMissed++
-      }
-    }, 10000)
   }
 
   toString(): string {
