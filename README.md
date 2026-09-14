@@ -1,212 +1,332 @@
-# tuya-mqtt
+# tuya-mqtt-gladys
 
-Bridge for controlling Tuya IoT devices locally via MQTT with Home Assistant MQTT Discovery.
+A local Tuya-to-MQTT bridge with first-class support for Gladys Assistant.
+
+This project is based on [nikoraes/tuya-mqtt](https://github.com/nikoraes/tuya-mqtt) and retains much of its Home Assistant MQTT discovery support while adding native Gladys MQTT topics, cleaner device topic names, improved state synchronisation, and more robust logging.
 
 ## Features
 
-- Connects to Tuya devices locally using the TuyAPI library (no cloud dependency)
-- Automatic Home Assistant MQTT Discovery — devices appear in HA automatically
-- Template engine for mapping Tuya DPS values to HA entities (switch, sensor, number, select)
-- Supports math transforms for DPS value conversion
-- MQTT configuration via environment variables (12-factor app style)
+* Controls compatible Tuya devices directly over the local network using TuyAPI
+* No Tuya cloud connection is required during normal operation
+* Publishes clean MQTT state and command topics
+* Publishes device state using the native Gladys MQTT topic format
+* Accepts commands from Gladys over MQTT
+* Supports stable per-device topic slugs
+* Updates MQTT and Gladys state when a device changes externally, including changes made through Smart Life or another controller
+* Supports value transforms for Tuya DPS values
+* Converts colour temperature between device-specific Kelvin ranges and the mired range used by Gladys
+* Retains the upstream Home Assistant MQTT discovery and command implementation
+* Automatically reconnects to Tuya devices and the MQTT broker
+* Timestamped logging with configurable timezone
+* Runs directly under Node.js or in Docker
 
-## Prerequisites
+## Requirements
 
-- Node.js 20+
-- MQTT broker (e.g., Mosquitto)
-- Home Assistant with MQTT integration
-- Device ID and local key for each Tuya device (see [TuyAPI setup](https://github.com/codetheweb/tuyapi/blob/master/docs/SETUP.md))
+* Node.js 20+ or Docker
+* An MQTT broker such as Mosquitto
+* Tuya device ID and local key for each device
+* Network access from tuya-mqtt to the Tuya devices
+
+Gladys Assistant is required only if you want to use the native Gladys integration.
+
+Home Assistant is not required. The inherited Home Assistant MQTT discovery support remains available but is not the primary focus of this fork.
 
 ## Installation
 
+Clone this repository:
+
 ```bash
-git clone https://github.com/nikoraes/tuya-mqtt
-cd tuya-mqtt
-npm install
+git clone https://github.com/MakoNZ/tuya-mqtt-gladys.git
+cd tuya-mqtt-gladys
+```
+
+### Node.js
+
+Install dependencies and build:
+
+```bash
+npm ci
 npm run build
 ```
 
-## Configuration
+Copy the sample environment file:
 
-### MQTT Connection
+```bash
+cp .env.sample .env
+```
 
-Configure via environment variables (or copy `.env.sample` to `.env`):
+Create a `devices.conf` file containing your devices. See [docs/DEVICES.md](docs/DEVICES.md) for configuration details.
 
-| Variable                | Default          | Description                           |
-| ----------------------- | ---------------- | ------------------------------------- |
-| `MQTT_HOST`             | `localhost`      | MQTT broker host                      |
-| `MQTT_PORT`             | `1883`           | MQTT broker port                      |
-| `MQTT_USERNAME`         | (empty)          | MQTT username                         |
-| `MQTT_PASSWORD`         | (empty)          | MQTT password                         |
-| `DEVICES_CONFIG_PATH`   | `./devices.conf` | Path to devices configuration file    |
+Start the bridge:
 
-### Device Configuration
+```bash
+npm start
+```
 
-Create a `devices.conf` file (strict JSON, **do not commit to git**):
+### Docker Compose
+
+An example `compose.yml` is included.
+
+Configure `.env` and `devices.conf`, then build and start:
+
+```bash
+docker compose up -d --build
+```
+
+View logs with:
+
+```bash
+docker compose logs -f tuya-mqtt
+```
+
+If your MQTT broker is running in another Docker network, adjust the network section of `compose.yml` to suit your environment.
+
+## Environment Configuration
+
+Configuration is read from environment variables and may be stored in a local `.env` file.
+
+| Variable              | Default          | Description                                                           |
+| --------------------- | ---------------- | --------------------------------------------------------------------- |
+| `TZ`                  | system timezone  | IANA timezone used for log timestamps, for example `Pacific/Auckland` |
+| `MQTT_HOST`           | `localhost`      | MQTT broker hostname or IP address                                    |
+| `MQTT_PORT`           | `1883`           | MQTT broker port                                                      |
+| `MQTT_USERNAME`       | empty            | MQTT username                                                         |
+| `MQTT_PASSWORD`       | empty            | MQTT password                                                         |
+| `MQTT_TOPIC_PREFIX`   | `tuya/`          | Prefix used for normal Tuya MQTT topics                               |
+| `DEVICES_CONFIG_PATH` | `./devices.conf` | Path to the device configuration file                                 |
+
+`.env` and `devices.conf` are excluded from Git. Do not commit MQTT passwords or Tuya local keys.
+
+Example:
+
+```dotenv
+TZ=UTC
+
+MQTT_HOST=localhost
+MQTT_PORT=1883
+MQTT_USERNAME=
+MQTT_PASSWORD=
+MQTT_TOPIC_PREFIX=tuya/
+
+DEVICES_CONFIG_PATH=./devices.conf
+```
+
+## Device Configuration
+
+Devices are defined in `devices.conf` using strict JSON.
+
+A simple smart plug might look like:
 
 ```json
 [
   {
-    "name": "Pool Heater",
-    "id": "***",
-    "key": "***",
+    "name": "Desk Plug",
+    "topic": "desk_plug",
+    "id": "<tuya-device-id>",
+    "key": "<tuya-local-key>",
+    "ip": "192.168.1.50",
+    "version": "3.3",
     "template": {
-      "power": { "key": 1, "type": "bool" },
-      "current_temperature": { "key": 102, "type": "float" },
-      "set_temperature": {
-        "key": 106,
-        "type": "float",
-        "topicMin": 18,
-        "topicMax": 45
-      },
-      "operating_mode": { "key": 105, "type": "str" },
-      "boost": { "key": 117, "type": "bool" }
+      "power": {
+        "key": 1,
+        "type": "bool"
+      }
     }
   }
 ]
 ```
 
-The template engine maps each entry to a Home Assistant MQTT entity:
-
-| Template Type          | HA Component | Description                 |
-| ---------------------- | ------------ | --------------------------- |
-| `bool`                 | `switch`     | ON/OFF control              |
-| `float` (no range)     | `sensor`     | Read-only floating point    |
-| `float` (with min/max) | `number`     | Settable number with range  |
-| `int` (no range)       | `sensor`     | Read-only integer           |
-| `int` (with min/max)   | `number`     | Settable integer with range |
-| `str`                  | `sensor`     | String value display        |
-| `str` (with options)   | `select`     | Dropdown selection          |
-
-### Climate Entity (Heat Pump / Thermostat)
-
-For heat pumps, pool heaters, or any HVAC device, you can add a **climate entity** that presents a unified thermostat dial in Home Assistant. This publishes an MQTT climate discovery config alongside the individual template entities.
-
-Add a `climate` section to your device config:
+A light with brightness and colour-temperature controls might use:
 
 ```json
-{
-  "name": "Pool Heater",
-  "id": "***",
-  "key": "***",
-  "ip": "192.168.1.55",
-  "version": "3.3",
-  "template": {
-    "power": { "key": 1, "type": "bool" },
-    "current_temperature": { "key": 102, "type": "float" },
-    "set_temperature": { "key": 106, "type": "float", "topicMin": 18, "topicMax": 45 },
-    "operating_mode": { "key": 105, "type": "str" },
-    "boost": { "key": 117, "type": "bool" }
-  },
-  "climate": {
-    "name": "Pool Heat Pump",
-    "modes": ["off", "heat"],
-    "mode_map": { "heat": "warm" },
-    "min_temp": 18,
-    "max_temp": 45,
-    "temp_step": 0.5,
-    "entities": {
-      "current_temperature": "current_temperature",
-      "target_temperature": "set_temperature",
-      "power": "power",
-      "mode": "operating_mode",
-      "preset_modes": { "boost": "boost" }
+[
+  {
+    "name": "Bedroom Lamp",
+    "topic": "bedroom_lamp",
+    "id": "<tuya-device-id>",
+    "key": "<tuya-local-key>",
+    "ip": "192.168.1.51",
+    "version": "3.3",
+    "template": {
+      "power": {
+        "key": 20,
+        "type": "bool"
+      },
+      "brightness": {
+        "key": 22,
+        "type": "int",
+        "topicMin": 0,
+        "topicMax": 100,
+        "stateMath": "/10",
+        "commandMath": "*10"
+      },
+      "color_temp": {
+        "key": 23,
+        "type": "int",
+        "topicMin": 2700,
+        "topicMax": 6500
+      }
     }
   }
-}
+]
 ```
 
-**Climate config options:**
+The actual DPS numbers, ranges and transforms vary between Tuya devices. Do not assume the example above matches a different device.
 
-| Option | Type | Description |
-| ------ | ---- | ----------- |
-| `name` | string | Display name for the climate entity (defaults to device name) |
-| `modes` | string[] | Supported HVAC modes, e.g. `["off", "heat"]` |
-| `mode_map` | object | Maps HA mode names to Tuya operating_mode values, e.g. `{ "heat": "warm" }` |
-| `min_temp` | number | Minimum target temperature |
-| `max_temp` | number | Maximum target temperature |
-| `temp_step` | number | Temperature step (default: 1.0) |
-| `entities.current_temperature` | string | Template entity name for current temperature sensor |
-| `entities.target_temperature` | string | Template entity name for set temperature number |
-| `entities.power` | string | Template entity name for power switch |
-| `entities.mode` | string | Template entity name for operating mode sensor (optional) |
-| `entities.preset_modes` | object | Map of HA preset names to template entity names, e.g. `{ "boost": "boost" }` |
+See [docs/DEVICES.md](docs/DEVICES.md) for the complete template format.
 
-The climate entity reads `current_temperature` and `target_temperature` from the same MQTT topics as the template entities. HVAC mode commands are translated: `off` sets the power switch off, `heat` sets power on and optionally sets the operating mode via `mode_map`.
+## MQTT Topics
 
-### Template Options
+Each device may define a stable `topic` slug. With:
 
-| Option        | Type     | Description                                                               |
-| ------------- | -------- | ------------------------------------------------------------------------- |
-| `key`         | number   | Tuya DPS key                                                              |
-| `type`        | string   | `bool`, `int`, `float`, `str`, `hsb`, `hsbhex`                            |
-| `topicMin`    | number   | Minimum command value                                                     |
-| `topicMax`    | number   | Maximum command value                                                     |
-| `stateMath`   | string   | Math expression applied to DPS value before publishing (e.g., `/10`)      |
-| `commandMath` | string   | Math expression applied to command value before setting DPS (e.g., `*10`) |
-| `options`     | string[] | Enum values for `str` type (enables `select` entity)                      |
+```json
+"topic": "bedroom_lamp"
+```
 
-## Usage
+and the default prefix `tuya/`, a `power` entity uses:
+
+```text
+tuya/bedroom_lamp/power/state
+tuya/bedroom_lamp/power/set
+```
+
+Other template entities follow the same pattern:
+
+```text
+tuya/<device>/<entity>/state
+tuya/<device>/<entity>/set
+```
+
+The bridge also accepts:
+
+```text
+tuya/<device>/command
+```
+
+with the payload:
+
+```text
+get-states
+```
+
+to request a state refresh.
+
+Changed raw Tuya DPS values are also published to:
+
+```text
+tuya/<device>/dps/state
+```
+
+## Gladys Assistant
+
+This fork publishes state directly using Gladys' MQTT device/feature topic structure.
+
+For a device configured as:
+
+```json
+"topic": "bedroom_lamp"
+```
+
+the Gladys device external ID becomes:
+
+```text
+mqtt:bedroom-lamp
+```
+
+For an entity called `power`, the feature external ID becomes:
+
+```text
+mqtt:bedroom-lamp:power
+```
+
+The bridge publishes state to:
+
+```text
+gladys/master/device/mqtt:bedroom-lamp/feature/mqtt:bedroom-lamp:power/state
+```
+
+and listens for Gladys commands on:
+
+```text
+gladys/device/mqtt:bedroom-lamp/feature/mqtt:bedroom-lamp:power/state
+```
+
+The corresponding MQTT device and features in Gladys should use matching external IDs.
+
+### Gladys value handling
+
+Boolean values are published to Gladys as:
+
+```text
+0
+1
+```
+
+Numeric template values are published after applying any configured `stateMath`.
+
+For an entity named `color_temp`, the normal template state represents the device colour temperature in Kelvin. The Gladys state is converted into the 153–500 mired range expected by Gladys.
+
+Gladys colour-temperature commands are converted back into the Kelvin range specified by the template before being translated to the underlying Tuya DPS value.
+
+## External State Changes
+
+The bridge listens for both normal TuyAPI data events and DPS refresh events.
+
+This means changes made outside this bridge, for example using the physical device or Smart Life application, are fed back through the normal state processing and published to MQTT and Gladys.
+
+This keeps the Gladys dashboard synchronised with the actual device rather than only updating after commands sent by Gladys itself.
+
+## Template Value Transforms
+
+Numeric template entries may contain:
+
+```json
+"stateMath": "/10",
+"commandMath": "*10"
+```
+
+`stateMath` converts the raw Tuya DPS value before publishing it.
+
+`commandMath` converts an MQTT command back into the raw value expected by the device.
+
+For example, a Tuya brightness range of 0–1000 can be exposed as 0–100 by dividing received values by 10 and multiplying commands by 10.
+
+## Home Assistant Compatibility
+
+The original project added Home Assistant MQTT discovery support. That implementation is still present in this fork.
+
+When a device has a template, the bridge publishes Home Assistant discovery messages and subscribes to the corresponding command topics. The optional `climate` configuration inherited from upstream is also retained.
+
+Home Assistant support has not been the primary development or testing target of this Gladys-focused fork, so Gladys and the normal MQTT topics should be considered the primary supported interfaces.
+
+## Development
+
+Build:
 
 ```bash
-# Development
+npm run build
+```
+
+Run:
+
+```bash
+npm start
+```
+
+Watch TypeScript sources:
+
+```bash
 npm run dev
-
-# Production
-npm run build && npm start
-
-# Enable debug logging
-DEBUG=tuya-mqtt:* npm start
 ```
 
-## Docker
+## Upstream
 
-```bash
-docker build -t tuya-mqtt .
-docker run -d \
-  --name tuya-mqtt \
-  -e MQTT_HOST=mqtt.example.com \
-  -e MQTT_PORT=1883 \
-  -e MQTT_USERNAME=user \
-  -e MQTT_PASSWORD=pass \
-  -v $(pwd)/devices.conf:/app/devices.conf \
-  tuya-mqtt
-```
+This project is based on:
 
-## Kubernetes Deployment
+[nikoraes/tuya-mqtt](https://github.com/nikoraes/tuya-mqtt)
 
-Create a ConfigMap with your device configuration:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: tuya-mqtt-config
-  namespace: tuya-mqtt
-data:
-  devices.conf: |
-    [
-      {
-        name: 'Pool Heater',
-        id: '627786609c9c1f448791',
-        key: '|*7(%WY[qk}_L/<&',
-        template: { ... }
-      }
-    ]
-```
-
-See the `deploy/` directory for example Kubernetes manifests.
-
-## Merging Device Configs
-
-When you acquire new device keys via `tuya-cli wizard`, save the output to `new-devices.conf` and run:
-
-```bash
-npm run merge-devices
-```
-
-This will update `devices.conf` with new/updated devices while preserving your templates.
+The Gladys-specific integration, topic handling and state synchronisation in this repository were added on top of that project.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

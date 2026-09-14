@@ -3,6 +3,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+* Native Gladys Assistant MQTT state and command topics
+* Stable per-device MQTT topic slugs via the `topic` device property
+* Configurable normal MQTT topic prefix via `MQTT_TOPIC_PREFIX`
+* State handling for TuyAPI `dp-refresh` events so changes made outside the bridge are reflected in MQTT and Gladys
+* Gladys colour-temperature conversion between its 153–500 mired range and device-specific Kelvin ranges
+* Timestamped logging with timezone support through `TZ`
+* Docker Compose configuration
+
+### Changed
+
+* Improved device logging to include friendly names and connection details
+* Normalised MQTT topic-prefix handling
+* Improved propagation of externally initiated Tuya state changes
+* MQTT and deployment settings are supplied through environment variables rather than being embedded in the Compose configuration
+* Suppressed the default dotenv startup banner so application logs use a consistent timestamp format
+
+### Compatibility
+
+* The upstream Home Assistant MQTT discovery and climate support remains present.
+* Gladys Assistant and the normal MQTT topic interface are the primary development targets of this fork.
+
+
 ## [4.0.0]
 ### Added
 - Rewritten in TypeScript

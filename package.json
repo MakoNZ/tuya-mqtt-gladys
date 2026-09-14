@@ -1,7 +1,7 @@
 {
   "name": "tuya-mqtt",
   "version": "4.0.0",
-  "description": "Control Tuya devices locally via MQTT with Home Assistant discovery",
+  "description": "Local Tuya-to-MQTT bridge with native Gladys Assistant support and retained Home Assistant MQTT discovery",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

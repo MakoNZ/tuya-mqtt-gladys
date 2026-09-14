@@ -1,213 +1,402 @@
-# tuya-mqtt - Devices
-The most powerful feature in tuya-mqtt is the ability to configure devices to use friendly topics.  For some devices there exist pre-defined device templates which makes using those devices quite easy, simply add the type information to the devices.conf file and tuya-mqtt automatically creates friendly topics for that device.
+# Device Configuration
 
-Friendly topics make it easy to communicate with the device in a standard way and thus integrating into various Home Automation platforms.  The topic style generally follows that used by the Home Assistant MQTT integration components and the pre-defined devices automatically send Home Assistant style MQTT discovery messages during startup to make integration with Home Assistant, or other platforms which understand Home Assistant MQTT discovery, even easier.
+Devices are configured in `devices.conf`.
 
-If the device does not have a pre-defined device template, it's possible to create a template using the [generic device template](#generic-device-templates) feature.
+The file uses strict JSON and normally contains an array of one or more Tuya devices.
 
-## Pre-defined Device Templates
-Pre-defined device templates (except for the Generic Device) will always expose friendly topics for the given device in a consistent manner.  Currently the following pre-defined device templates are available:
+`devices.conf` contains Tuya local keys and is excluded from Git. Do not commit a real device configuration to a public repository.
 
-| Device Type | Descrition |
-| --- | --- |
-| SimpleSwitch | Supports simple on/off devices |
-| SimpleDimmer | Supports simple devices with on/on and brightness |
-| RGBTWLight | Supports color/white lights with optional color temerature support |
-| GenericDevice | Allows defining a custom template for any device |
+## Basic Device Definition
 
-To use a device template, simply add the "type" option to the devices.conf similar to the following example:
-```
+A minimal device requires a Tuya device ID, local key and a template describing the DPS values to expose.
+
+Example smart plug:
+
+```json
 [
   {
-    name: 'Tuya Device 1',
-    id: '86435357d8b123456789',
-    key: '8b2a69c9876543210',
-    type: 'RGBTWLight'
-  }
-]
-```
-Once the device type is defined tuya-mqtt will attempt to create friendly topics for that device type on connection to the device.  Each device type defines specific defaults for DPS values which are typical for common Tuya devices and some, like RGBTWLight, have logic to attempt to detect different variation by querying the device.  The goal is that, in most cases, simply adding the type is all that is needed, however, in many cases it is also possible to override the manual settings for the device.  The device friendly topics and options for each device are documented below.
-
-### SimpleSwitch
-Simple devices that support only on/off.
-| Topic | Description | Values |
-| --- | --- | --- |
-| state | Power state | on/off |
-| command | Set power state | on/off, 0/1, true/false |
-
-Manual configuration options:
-| Option | Description | Default |
-| --- | --- | --- |
-| dpsPower | DPS key for power state | 1 |
-
-### SimpleDimmer
-Simple device with on/off and brightness functions (dimmer switches or lights)
-| Topic | Description | Values |
-| --- | --- | --- |
-| state | Power state | on/off |
-| command | Set power state | on/off, 0/1, true/false |
-| brightness_state | Brightness in % | 0-100 |
-| brightness_command | set brightness in % | 0-100 |
-
-Manual configuration options:
-| Option | Description | Default |
-| --- | --- | --- |
-| dpsPower | DPS key for power state | 1 |
-| dpsBrightness | DPS key for brightness state | 2 |
-| brightnessScale | Scale for brightness DPS value | 255 |
-
-### RGBTWLight
-The RGBTWLight device support Tuya color lights (bulbs and LEDs). Tuya lights operate in either white or color mode.  The RGBTWLight device automatically switches between modes on certain conditions as documented below:
-| Condition | Mode |
-| --- | --- |
-| Changes white brightness | white |
-| Changes to color temperature (for device with color temp support) | white |
-| Saturation < 10 % | white |
-| Saturation >= 10 % | color |
-| All other changes | current mode |
-
-This means changing the hue of the light will only switch to color mode if saturation is also >= 10%.  Some lights automatically attempt to switch to color mode when any HSB value is updated however, if the saturation setting remains < 10%, tuya-mqtt will force the light back to white mode in this case.  This can cause a very quick flicker when chaning hue or color brightness while the saturation remains below the 10% threshold.  I expect this not to be a common issue and implemented this in an attempt to make all tuya lights behave in a consistent way.
-
-When the bulb is in white mode, saturation values in the friendly topics are always reported as 0%.  This is true even if the mode is toggled manually from color to white mode using the mode_command topic or the Tuya/SmartLife app.  When the light is toggled back to color mode, saturation will be reported at the correct level.  This is done primarly as a means to indicate color state to automation platforms that don't have a concept of white/color mode, otherwise a light in white mode may still be represented with a color icon in the platforms UI.
-
-Not all devices support color temperature and the script attempts to detect this capability and enables the color temperature topics only when found.  Color temperature topics report in Mireds (commonly used by automation tools) and the default range supports roughly 2500K-6500K.  This works reasonably well for most available Tuya devices, even if they are not exactly in this range, but, if you know a devices specific color range, the limits can be manually specified to more accurately reflect the exact color temperature.
-
-Tuya bulbs store their HSB color value in a single DPS key using a custom format.  Some bulbs use a 14 character format, referred to as HSBHEX, which represents the saturation and brightness values from 0-255 as 2 character hex, while the others use a 12 character format, referred to as HSB, which still uses hex values, but stores saturation and brightness values from 0-1000 as 4 character hex.  The code attempts to autodetect the format used by the bulb and perform the proper conversion in all cases, but this can be overridden for cases where the dection method fails.
-
-| Topic | Description | Values |
-| --- | --- | --- |
-| state | Power state | on/off |
-| command | Set power state | on/off, 0/1, true/false |
-| white_brightness_state | White mode brightness in % | 0-100 |
-| white_brightness_command | Set white mode brightness in % | 0-100 |
-| color_brightness_state | Color mode brightness in % | 0-100 |
-| color_brightness_command | Set white mode brightness in % | 0-100 |
-| hs_state | Hue, saturation % | H,S (Hue 0-360, Saturation 0-100) |
-| hs_command | Set hue, saturation % | H,S (Hue 0-360, Saturation 0-100) |
-| hsb_state | Hue, saturation %, brightness % | H,S,B (Hue 0-360, Saturation 0-100, Brightness 0-100) |
-| hsb_command | Set hue, saturation %, brightness % | H,S,B (Hue 0-360, Saturation 0-100, Brightness 0-100) |
-| mode_state | White/Color mode | 'white', 'colour' (some devices also support scenes here) |
-| mode_command | Set white/color mode | 'white', 'colour' (some devices also support scenes here) |
-| color_temp_state | Color temperature in mireds (only available if device support color temp) | 154-400 (defult range, can be overridden) |
-| color_temp_command | Set color temperature in mireds (only available if device support color temp)  | 154-400 (defult range, can be overridden) |
-
-Manual configuration options:
-| Option | Description | Default (common detected values) |
-| --- | --- | --- |
-| dpsPower | DPS key for power state | Auto Detect (1,20) |
-| dpsMode | DPS key for white/color mode state | Auto Detect (2,21) |
-| dpsWhiteValue | DPS key for white mode brightness | Auto Detect (3,22) |
-| whiteValueScale | White mode brightness DPS scale | Auto Detect (255, 1000) |
-| dpsColorTemp | DPS key for color temperature | Auto Detect (4,23) |
-| minColorTemp | Min color temperature in Mireds | 154 (~6500K) |
-| maxColorTemp | Max color temperature in Mireds | 400 (~2500K) |
-| colorTempScale | Color temperature DPS key scale | Auto Detect (255, 1000) |
-| dpsColor | DPS key for HSB color values | Auto Detect (5,24) |
-| colorType | Tuya color format for color DPS key | Auto Detect (hsb, hsbhex) |
-
-To use the manual configuration options simply add them to device.conf file after defining the device type like the following example:
-```
-[
-  {
-    name: 'Tuya Device 1',
-    id: '86435357d8b123456789',
-    key: '8b2a69c9876543210',
-    type: 'RGBTWLight',
-    dpsPower: 31,
-    dpsMode: 32,
-    dpsWhiteValue: 33,
-    whiteValueScale: 255,
-    dpsColorTemp: 34,
-    minColorTemp: 165,
-    maxColorTemp: 385,
-    colorTempScale: 255,
-    dpsColor: 34,
-    colorType: 'hsbhex'
-  }
-]
-```
-
-## Generic Device Templates
-If a pre-defined device tempate does not exist for the device, or does not expose all capabilities of the device, there are still mulitple options available to control the devices.  One method is to use the DPS topics directly to control the device using either native Tuya JSON commands or via the DPS key values by using the DPS key topics (see [DPS Topics](TOPICS.md#dps-topics)).  The second method is to create a template for your device to map DPS key values to friendly topics.  The GenericDevice type allows you to manually create a template for any device using the same templating engine as the pre-defined device templates.  Once you've created a tempalte for your device, it can be re-used with other, similar devices and you can submit your template to the tuya-mqtt project for other to use, or even for inclusion at a pre-defined device template in the future.
-
-Creating a device template is relatively straightforward, but first you must know what DPS keys your devices uses.  The GenericDevice attempts to query all device DPS states on startup, but some devices to not respond to this command, however, the generic device will ALWAYS report any DPS topics from which it receives upated.  The easiest way to determine how your device uses it's DPS topics is to connect to the MQTT broker via a tool like MQTT Explorer or mosquitto_sub, and watch the topics as you manipulate the device with the Tuya/Smartlife app.
-
-Once you have a reasonable idea of how the device uses it's DPS key values, you can create a template.  A simple template for a dimmer looks something like this:
-```
-[
-  {
-    name: 'Tuya Device 1',
-    id: '86435357d8b123456789',
-    key: '8b2a69c9876543210',
-    template: {
-      state: {
-        key: 1,
-        type: 'bool'
-      },
-      brightness_state: { 
-        key: 2,
-        type: 'int',
-        topicMin: 1,
-        topicMax: 100,
-        stateMath: '/2.55',
-        commandMath: '*2.55'
+    "name": "Desk Plug",
+    "topic": "desk_plug",
+    "id": "<tuya-device-id>",
+    "key": "<tuya-local-key>",
+    "ip": "192.168.1.50",
+    "version": "3.3",
+    "template": {
+      "power": {
+        "key": 1,
+        "type": "bool"
       }
     }
   }
 ]
 ```
-The template above defines two topics "state" and "brightness_state", and the template engine automatically creates the corresponding command topics, in this case specifically "command" and "brightness_command".
 
-The "state" topic maps to DPS key 1, and uses a bool (true/false) value in the DPS key.  Now you will be able to see "on/off" state in the state topic instead of having to read the true/false value from the DPS/1 topic
+## Device Options
 
-The the "brightness_state" topic maps to DPS key 2, and this value defines the brightness using an integer in the 1-255 scale.  We define the value as an integer (type: 'int') and the stateMath and commandMath values allow transforming the raw DPS value into a more friendly value that will be presented in the topic.  In this case the raw DPS value will be divided by 2.55 before being published to the state, and and received commands will be mulitpled by that same value, converting the 1-255 to a simple 1-100 scale.  Note that the topicMin and topicMax values set the minimum and maximum values that the state topic will report and that the command topic will accept.  These values are "post-math" for state topics, and "pre-math" for command topics.
+| Option     | Required    | Description                                             |
+| ---------- | ----------- | ------------------------------------------------------- |
+| `id`       | yes         | Tuya device ID                                          |
+| `key`      | yes         | Tuya local key                                          |
+| `name`     | no          | Friendly name used in logs and metadata                 |
+| `topic`    | recommended | Stable MQTT topic slug                                  |
+| `ip`       | no          | Device IP address                                       |
+| `version`  | no          | Tuya protocol version, for example `3.3`                |
+| `type`     | no          | Optional descriptive device type                        |
+| `template` | recommended | Maps Tuya DPS keys to named MQTT entities               |
+| `climate`  | no          | Optional inherited Home Assistant climate configuration |
 
-The following tables define the available template value types and their options:
+Using an explicit `topic` is recommended because it keeps MQTT and Gladys identifiers stable even if the friendly device name changes.
 
-### Boolean values
-| option | value |
-| --- | --- |
-| type | 'bool' |
-| key | DPS key of the value |
+## Templates
 
-### Integer values
-| option | value |
-| --- | --- |
-| type | 'int' |
-| key | DPS key of the value |
-| topicMin | Minumum value allowed for the command topic |
-| topicMax | Maximum value allowed for the command topic | 
-| stateMath | Simple math applied to the DPS key value before being published to state topic |
-| commandMath | Simple math applied to command value before being set to DPS key |
+Each entry in `template` defines a named entity and maps it to a Tuya DPS key.
 
-### Floating point values
-| option | value |
-| --- | --- |
-| type | 'float' |
-| key | DPS key of the value |
-| topicMin | Minumum value allowed for the command topic |
-| topicMax | Maximum value allowed for the command topic | 
-| stateMath | Simple math applied to the DPS key value before being published to state topic |
-| commandMath | Simple math applied to command value before being set to DPS key |
+For example:
 
-### String values
-| option | value |
-| --- | --- |
-| type | 'str' |
-| key | DPS key of the value |
+```json
+"template": {
+  "power": {
+    "key": 20,
+    "type": "bool"
+  },
+  "brightness": {
+    "key": 22,
+    "type": "int",
+    "topicMin": 0,
+    "topicMax": 100,
+    "stateMath": "/10",
+    "commandMath": "*10"
+  }
+}
+```
 
-### Tuya HSB values (newer style Tuya, 12 character color value)
-| option | value |
-| --- | --- |
-| type | 'hsb' |
-| key | DPS key of the value |
-| components | Comma separated list of HSB components that should be included in this topic |
+This creates entities named `power` and `brightness`.
 
-### Tuya HSBHEX values (older style Tuya 14 character color value)
-| option | value |
-| --- | --- |
-| type | 'hsbhex' |
-| key | DPS key of the value |
-| components | Comma separated list of HSB components that should be included in this topic |
+With the default MQTT prefix and:
 
-Using these value types you can define templates for a wide range of devices.  Additional types and options are likely to be included in future versions of tuya-mqtt.
+```json
+"topic": "bedroom_lamp"
+```
+
+their normal MQTT topics are:
+
+```text
+tuya/bedroom_lamp/power/state
+tuya/bedroom_lamp/power/set
+
+tuya/bedroom_lamp/brightness/state
+tuya/bedroom_lamp/brightness/set
+```
+
+## Template Options
+
+| Option                | Description                                                        |
+| --------------------- | ------------------------------------------------------------------ |
+| `key`                 | Tuya DPS key                                                       |
+| `type`                | Value type: `bool`, `int`, `float`, `str`, `hsb` or `hsbhex`       |
+| `name`                | Optional display name                                              |
+| `topicMin`            | Minimum exposed/accepted numeric value                             |
+| `topicMax`            | Maximum exposed/accepted numeric value                             |
+| `stateMath`           | Arithmetic appended to the raw DPS value before publishing         |
+| `commandMath`         | Arithmetic appended to an incoming value before sending it to Tuya |
+| `components`          | Component list used by HSB colour values                           |
+| `options`             | Allowed values for a string/select entity                          |
+| `device_class`        | Optional Home Assistant sensor device class                        |
+| `unit_of_measurement` | Optional Home Assistant unit                                       |
+
+## Boolean Values
+
+Example:
+
+```json
+"power": {
+  "key": 1,
+  "type": "bool"
+}
+```
+
+The normal MQTT state is:
+
+```text
+ON
+OFF
+```
+
+Commands may use values such as:
+
+```text
+ON
+OFF
+1
+0
+true
+false
+toggle
+```
+
+Gladys receives boolean state as `1` or `0`.
+
+## Integer and Floating-Point Values
+
+Example:
+
+```json
+"brightness": {
+  "key": 22,
+  "type": "int",
+  "topicMin": 0,
+  "topicMax": 100,
+  "stateMath": "/10",
+  "commandMath": "*10"
+}
+```
+
+If the raw Tuya DPS value is `750`, the published value becomes:
+
+```text
+75
+```
+
+A command of:
+
+```text
+50
+```
+
+is converted to `500` before being sent to the Tuya device.
+
+For numeric values, a normal MQTT command topic is created when `topicMin` or `topicMax` is defined. Numeric entries without a range are treated as read-only sensors by the inherited Home Assistant discovery code.
+
+## String Values
+
+Example read-only string:
+
+```json
+"mode": {
+  "key": 21,
+  "type": "str"
+}
+```
+
+A string becomes writable when an `options` array is provided:
+
+```json
+"mode": {
+  "key": 21,
+  "type": "str",
+  "options": [
+    "white",
+    "colour"
+  ]
+}
+```
+
+## Colour Values
+
+The template engine retains support for Tuya HSB colour values.
+
+Available types are:
+
+```text
+hsb
+hsbhex
+```
+
+The optional `components` property selects which components are exposed:
+
+```json
+"colour": {
+  "key": 24,
+  "type": "hsb",
+  "components": "h,s,b"
+}
+```
+
+Tuya devices vary considerably in their colour DPS formats. Determine the actual DPS layout of the device before creating the template.
+
+## Colour Temperature and Gladys
+
+An entity named:
+
+```text
+color_temp
+```
+
+receives special handling for Gladys.
+
+The template's `topicMin` and `topicMax` values describe the device's usable Kelvin range.
+
+For example:
+
+```json
+"color_temp": {
+  "key": 23,
+  "type": "int",
+  "topicMin": 2700,
+  "topicMax": 6500,
+  "stateMath": "<device-specific transform>",
+  "commandMath": "<device-specific transform>"
+}
+```
+
+The normal template state is converted into Kelvin according to the configured transform.
+
+For Gladys, that Kelvin value is mapped into Gladys' 153–500 mired colour-temperature range.
+
+Commands arriving from Gladys are converted in the opposite direction before being sent to the device.
+
+The DPS scale and transform are device-specific. Values that work for one Tuya bulb should not be assumed to work for another.
+
+## MQTT Topic Naming
+
+`MQTT_TOPIC_PREFIX` defaults to:
+
+```text
+tuya/
+```
+
+The configured device `topic` is appended to that prefix.
+
+For:
+
+```json
+"topic": "bedroom_lamp"
+```
+
+the base topic is:
+
+```text
+tuya/bedroom_lamp/
+```
+
+Each template entity then uses:
+
+```text
+tuya/bedroom_lamp/<entity>/state
+tuya/bedroom_lamp/<entity>/set
+```
+
+The device also listens on:
+
+```text
+tuya/bedroom_lamp/command
+```
+
+Send:
+
+```text
+get-states
+```
+
+to request a state refresh.
+
+Raw changed DPS values are published as JSON to:
+
+```text
+tuya/bedroom_lamp/dps/state
+```
+
+## Gladys MQTT IDs
+
+Gladys identifiers are generated from the device `topic`.
+
+Underscores are converted to hyphens.
+
+For:
+
+```json
+"topic": "bedroom_lamp"
+```
+
+the Gladys device external ID is:
+
+```text
+mqtt:bedroom-lamp
+```
+
+For an entity named `brightness`, its feature external ID is:
+
+```text
+mqtt:bedroom-lamp:brightness
+```
+
+The bridge publishes its state to:
+
+```text
+gladys/master/device/mqtt:bedroom-lamp/feature/mqtt:bedroom-lamp:brightness/state
+```
+
+and accepts commands from:
+
+```text
+gladys/device/mqtt:bedroom-lamp/feature/mqtt:bedroom-lamp:brightness/state
+```
+
+Configure corresponding MQTT features in Gladys using those external IDs.
+
+## Detecting Tuya DPS Values
+
+The DPS layout is device-specific.
+
+A practical way to determine a device's DPS values is to monitor the bridge logs or MQTT state while changing one property at a time using the physical controls or Smart Life.
+
+For example:
+
+```bash
+mosquitto_sub -h <broker> -t 'tuya/#' -v
+```
+
+Watch which DPS keys or template values change when you toggle power, adjust brightness, or change colour temperature.
+
+The bridge handles both normal TuyAPI data events and `dp-refresh` events, so externally initiated changes can be reflected through MQTT.
+
+## Example: Simple Light
+
+```json
+[
+  {
+    "name": "Bedroom Lamp",
+    "topic": "bedroom_lamp",
+    "id": "<tuya-device-id>",
+    "key": "<tuya-local-key>",
+    "ip": "192.168.1.51",
+    "version": "3.3",
+    "template": {
+      "power": {
+        "key": 20,
+        "type": "bool"
+      },
+      "brightness": {
+        "key": 22,
+        "type": "int",
+        "topicMin": 0,
+        "topicMax": 100,
+        "stateMath": "/10",
+        "commandMath": "*10"
+      }
+    }
+  }
+]
+```
+
+The DPS numbers and transforms above are examples only.
+
+## Home Assistant Compatibility
+
+The upstream Home Assistant MQTT discovery implementation remains in this fork.
+
+Template entries are mapped to Home Assistant components approximately as follows:
+
+| Template                      | Home Assistant component |
+| ----------------------------- | ------------------------ |
+| `bool`                        | `switch`                 |
+| `int` / `float` without range | `sensor`                 |
+| `int` / `float` with range    | `number`                 |
+| `str` without options         | `sensor`                 |
+| `str` with options            | `select`                 |
+
+The optional `device_class` and `unit_of_measurement` template properties are used by Home Assistant discovery.
+
+The upstream `climate` configuration is also still present.
+
+Home Assistant support is retained for compatibility, but Gladys and the normal MQTT topic interface are the primary targets of this fork.
